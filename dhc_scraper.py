@@ -318,23 +318,62 @@ class DHCScraper:
         return new_rows
 
     def _go_to_next_page(self, page: Page) -> bool:
-        next_link = page.get_by_role("link", name=re.compile(r"^Next$", re.I)).first
-        if next_link.count() == 0:
-            return False
+        active_el = page.locator(".pagination .active").first
+        first_row_el = page.locator("table tbody tr").first
+        active_before = self._clean_text(active_el.inner_text()) if active_el.count() > 0 else ""
+        first_row_before = self._clean_text(first_row_el.inner_text()) if first_row_el.count() > 0 else ""
 
-        classes = (next_link.get_attribute("class") or "").lower()
-        parent_classes = (next_link.locator("xpath=..").get_attribute("class") or "").lower()
-        if "disabled" in classes or "disabled" in parent_classes:
+        candidates = [
+            page.get_by_role("link", name=re.compile(r"^Next$", re.I)).first,
+            page.locator(".pagination a[aria-label='Next']").first,
+            page.locator(".pagination li.next a, .pagination li.page-item.next a").first,
+            page.locator(".pagination a[rel='next']").first,
+            page.locator(".pagination a:has-text('>'), .pagination a:has-text('»')").first,
+        ]
+
+        next_link = None
+        for candidate in candidates:
+            if candidate.count() == 0:
+                continue
+            classes = (candidate.get_attribute("class") or "").lower()
+            parent_classes = (candidate.locator("xpath=..").get_attribute("class") or "").lower()
+            aria_disabled = (candidate.get_attribute("aria-disabled") or "").lower()
+            if "disabled" in classes or "disabled" in parent_classes or aria_disabled == "true":
+                return False
+            next_link = candidate
+            break
+
+        if not next_link:
             return False
 
         current_url = page.url
         next_link.click()
+
+        page_changed = False
         try:
-            page.wait_for_load_state("networkidle", timeout=30_000)
+            page.wait_for_function(
+                r"""([active, rowText]) => {
+                    const activeEl = document.querySelector('.pagination .active');
+                    const currentActive = (activeEl?.textContent || '').replace(/\s+/g, ' ').trim();
+                    const firstRow = document.querySelector('table tbody tr');
+                    const currentRow = (firstRow?.textContent || '').replace(/\s+/g, ' ').trim();
+                    return currentActive !== active || currentRow !== rowText;
+                }""",
+                arg=[active_before, first_row_before],
+                timeout=30_000,
+            )
+            page_changed = True
         except TimeoutError:
-            logging.info("networkidle timeout after Next click; continuing")
-        page.wait_for_timeout(800)
-        return page.url != current_url or page.locator("table tbody tr").count() > 0
+            try:
+                page.wait_for_load_state("networkidle", timeout=5_000)
+            except TimeoutError:
+                logging.info("Pagination wait timeout after Next click; checking page state directly")
+
+        active_el = page.locator(".pagination .active").first
+        first_row_el = page.locator("table tbody tr").first
+        active_after = self._clean_text(active_el.inner_text()) if active_el.count() > 0 else ""
+        first_row_after = self._clean_text(first_row_el.inner_text()) if first_row_el.count() > 0 else ""
+        return page_changed or page.url != current_url or active_after != active_before or first_row_after != first_row_before
 
     def run(self) -> None:
         self.setup()

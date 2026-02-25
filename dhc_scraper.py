@@ -318,28 +318,44 @@ class DHCScraper:
         return new_rows
 
     def _go_to_next_page(self, page: Page) -> bool:
-        active_el = page.locator(".pagination .active").first
+        active_el = page.locator(
+            ".pagination .active, .pagination .page-item.active, .dataTables_paginate .current"
+        ).first
         first_row_el = page.locator("table tbody tr").first
         active_before = self._clean_text(active_el.inner_text()) if active_el.count() > 0 else ""
         first_row_before = self._clean_text(first_row_el.inner_text()) if first_row_el.count() > 0 else ""
 
         candidates = [
             page.get_by_role("link", name=re.compile(r"^Next$", re.I)).first,
+            page.get_by_role("button", name=re.compile(r"^Next$", re.I)).first,
             page.locator(".pagination a[aria-label='Next']").first,
+            page.locator(".pagination button[aria-label='Next']").first,
             page.locator(".pagination li.next a, .pagination li.page-item.next a").first,
+            page.locator(".pagination li.next button, .pagination li.page-item.next button").first,
             page.locator(".pagination a[rel='next']").first,
+            page.locator(".dataTables_paginate .paginate_button.next").first,
             page.locator(".pagination li.active + li a").first,
+            page.locator(".pagination li.active + li button").first,
             page.locator(".pagination a:has-text('>'), .pagination a:has-text('»')").first,
+            page.locator("button:has-text('Next'), a:has-text('Next')").first,
         ]
 
         next_link = None
         for candidate in candidates:
             if candidate.count() == 0:
                 continue
+            if not candidate.is_visible():
+                continue
             classes = (candidate.get_attribute("class") or "").lower()
             parent_classes = (candidate.locator("xpath=..").get_attribute("class") or "").lower()
             aria_disabled = (candidate.get_attribute("aria-disabled") or "").lower()
-            if "disabled" in classes or "disabled" in parent_classes or aria_disabled == "true":
+            disabled_attr = candidate.get_attribute("disabled")
+            if (
+                "disabled" in classes
+                or "disabled" in parent_classes
+                or aria_disabled == "true"
+                or (disabled_attr is not None and disabled_attr.lower() in {"", "disabled", "true"})
+            ):
                 continue
             next_link = candidate
             break
@@ -348,7 +364,11 @@ class DHCScraper:
             return False
 
         current_url = page.url
-        next_link.click()
+        try:
+            next_link.click(timeout=10_000)
+        except Exception:
+            # Fallback for JS-bound pagination widgets that block regular clicks.
+            next_link.evaluate("el => el.click()")
 
         page_changed = False
         try:
@@ -370,7 +390,9 @@ class DHCScraper:
             except TimeoutError:
                 logging.info("Pagination wait timeout after Next click; checking page state directly")
 
-        active_el = page.locator(".pagination .active").first
+        active_el = page.locator(
+            ".pagination .active, .pagination .page-item.active, .dataTables_paginate .current"
+        ).first
         first_row_el = page.locator("table tbody tr").first
         active_after = self._clean_text(active_el.inner_text()) if active_el.count() > 0 else ""
         first_row_after = self._clean_text(first_row_el.inner_text()) if first_row_el.count() > 0 else ""

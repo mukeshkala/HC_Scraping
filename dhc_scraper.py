@@ -328,6 +328,7 @@ class DHCScraper:
             page.locator(".pagination a[aria-label='Next']").first,
             page.locator(".pagination li.next a, .pagination li.page-item.next a").first,
             page.locator(".pagination a[rel='next']").first,
+            page.locator(".pagination li.active + li a").first,
             page.locator(".pagination a:has-text('>'), .pagination a:has-text('»')").first,
         ]
 
@@ -339,7 +340,7 @@ class DHCScraper:
             parent_classes = (candidate.locator("xpath=..").get_attribute("class") or "").lower()
             aria_disabled = (candidate.get_attribute("aria-disabled") or "").lower()
             if "disabled" in classes or "disabled" in parent_classes or aria_disabled == "true":
-                return False
+                continue
             next_link = candidate
             break
 

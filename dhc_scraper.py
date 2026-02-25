@@ -317,29 +317,9 @@ class DHCScraper:
 
         return new_rows
 
-    def _table_snapshot(self, page: Page) -> tuple[str, str]:
-        rows = page.locator("table tbody tr")
-        first_row = self._clean_text(rows.first.inner_text()) if rows.count() > 0 else ""
-        showing_text = ""
-        showing_candidate = page.locator(r"text=/Showing\s+\d+\s+to\s+\d+\s+of\s+\d+/i").first
-        if showing_candidate.count() > 0:
-            showing_text = self._clean_text(showing_candidate.inner_text())
-        return first_row, showing_text
-
-    def _go_to_next_page(self, page: Page, current_page_number: int) -> bool:
-        before_first_row, before_showing = self._table_snapshot(page)
-
-        candidates = [
-            page.locator("a:has-text('Next')").first,
-            page.locator("li.next a").first,
-            page.locator(".pagination .next a").first,
-        ]
-        next_link = None
-        for candidate in candidates:
-            if candidate.count() > 0:
-                next_link = candidate
-                break
-        if next_link is None:
+    def _go_to_next_page(self, page: Page) -> bool:
+        next_link = page.get_by_role("link", name=re.compile(r"^Next$", re.I)).first
+        if next_link.count() == 0:
             return False
 
         classes = (next_link.get_attribute("class") or "").lower()
@@ -347,40 +327,14 @@ class DHCScraper:
         if "disabled" in classes or "disabled" in parent_classes:
             return False
 
-        target_page = current_page_number + 1
-        clicked = False
-        for _ in range(2):
-            try:
-                next_link.click(timeout=8_000)
-                clicked = True
-                break
-            except Exception:
-                page.wait_for_timeout(500)
-        if not clicked:
-            return False
-
+        current_url = page.url
+        next_link.click()
         try:
-            page.wait_for_load_state("networkidle", timeout=15_000)
+            page.wait_for_load_state("networkidle", timeout=30_000)
         except TimeoutError:
             logging.info("networkidle timeout after Next click; continuing")
-
-        progressed = False
-        for _ in range(10):
-            page.wait_for_timeout(500)
-            after_first_row, after_showing = self._table_snapshot(page)
-            after_page = self._current_page_number(page, target_page)
-            if after_page >= target_page:
-                progressed = True
-                break
-            if (after_first_row and after_first_row != before_first_row) or (
-                after_showing and before_showing and after_showing != before_showing
-            ):
-                progressed = True
-                break
-
-        if not progressed:
-            logging.warning("Next was clicked but page content did not advance.")
-        return progressed
+        page.wait_for_timeout(800)
+        return page.url != current_url or page.locator("table tbody tr").count() > 0
 
     def run(self) -> None:
         self.setup()
@@ -417,7 +371,7 @@ class DHCScraper:
 
                 page_number = self._current_page_number(page, current_page)
                 if page_number < page_loop:
-                    if not self._go_to_next_page(page, current_page):
+                    if not self._go_to_next_page(page):
                         break
                     current_page += 1
                     continue
@@ -438,7 +392,7 @@ class DHCScraper:
                     logging.warning("No new rows across two consecutive pages; stopping to avoid loop")
                     break
 
-                moved = self._go_to_next_page(page, current_page)
+                moved = self._go_to_next_page(page)
                 if not moved:
                     logging.info("No next page available.")
                     break
